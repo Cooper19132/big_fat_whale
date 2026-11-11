@@ -1,0 +1,17 @@
+const fs=require('fs'),c=require('crypto'),os=require('os');
+const cookie=fs.readFileSync('server-cookie.txt','utf8').trim();
+const eq=cookie.indexOf('=');
+const name=cookie.slice(0,eq), value=cookie.slice(eq+1);
+const [ver,payload,sig]=value.split('.');
+const b64url=(b)=>Buffer.from(b).toString('base64').replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
+const pl=JSON.parse(Buffer.from(payload.replaceAll('-','+').replaceAll('_','/'),'base64').toString('utf8'));
+console.log('version:', ver, '| authority:', pl.authority, '| ttl(h):', ((pl.expiresAt-pl.issuedAt)/3600000).toFixed(1));
+const t=fs.readFileSync(os.homedir()+'/.dsh/.credentials.yaml','utf8');
+const m=/client-connection\/browser-session:[\s\S]*?secret:\s*(\S+)/.exec(t);
+const secret=Buffer.from(m[1].trim().replaceAll('-','+').replaceAll('_','/'),'base64');
+const expect=b64url(c.createHmac('sha256',secret).update(payload).digest());
+console.log('签名一致:', expect===sig);
+console.log('  本机:', expect.slice(0,24));
+console.log('  服务器:', sig.slice(0,24));
+const expectName='dsh-auth-'+b64url(c.createHash('sha256').update(pl.authority).digest());
+console.log('名字一致:', expectName===name);

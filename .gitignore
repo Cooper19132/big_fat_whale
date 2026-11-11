@@ -1,0 +1,36 @@
+# 敏感：私钥、登录态、cookie、凭证
+ssh/
+*.pem
+*.key
+*.enc
+cookie*.json
+*bili*cookie*
+*status-cookie*
+server-cookie.txt
+*credentials*
+
+# 大件：工作区产物、样本、截图
+dsh-work/
+samples/
+*.png
+*.jpg
+*.jpeg
+*.mp4
+*.zip
+*.rar
+*.7z
+memes.json
+stickers-import*.json
+
+# 依赖与缓存
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 临时
+*.log
+*.tmp
+_dl/
+dist/
