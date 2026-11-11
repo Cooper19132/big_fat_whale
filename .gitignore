@@ -38,3 +38,5 @@ dist/
 # 自持运维离线备件：只留说明与清单，二进制不进 git
 vendor/*.tar.gz
 vendor/*.tgz
+vendor/*.tar.zst
+vendor/*.zst

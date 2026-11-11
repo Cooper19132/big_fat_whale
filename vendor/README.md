@@ -12,9 +12,11 @@ PC       D:\dshworks\qqbot\vendor\
 
 | 文件 | 大小 | 内容 | 来源 |
 |---|---|---|---|
+| `qq-3.2.34-53644-2026-11-12.tar.zst` | 275M | **整个 QQ 客户端（726M 解压后）**，含 `QQ/qq` 主程序、`resources/app/`（Electron 壳 + 已注入的 napcat 目录）、全部 `.so`。**为了版本断了还能重装** | `/root/Napcat/opt/QQ`（zstd -3，2396 条目，20 秒打完，sha256 `5943d594…a2aa0f`） |
 | `napcat-runtime-2026-11-12.tar.gz` | 34M | NapCat 运行时整目录（`native/` 100M 压缩后主要部分、`static/`、`node_modules/`、`napcat.mjs`、`loadNapCat.js`、`config/`），已排除 `cache/` `logs/` | `/root/Napcat/opt/QQ/resources/app/app_launcher/napcat` |
 | `qq-agent-node_modules-2026-11-12.tar.gz` | 1.1M | qq-agent 的 node_modules + package-lock.json（4 个依赖：js-yaml qrcode undici ws，全是公开 npm 包） | `/opt/qq-agent` |
 | `manifest-2026-11-12.txt` | — | 版本与校验和基准：QQ 二进制 sha256、napcat.mjs sha256、loadNapCat.js sha256、依赖表、node/python/chrome/ffmpeg 版本 | 生成脚本自动写 |
+| `unzst.py` | — | **Windows 没装 zstd CLI 时用它拆包**：`python vendor/unzst.py vendor/qq-….tar.zst` → 同目录出 `.tar`，再用任意解压工具开。实测前 160MB 解码正常（1483 条目可读，尾部截断告警 2 行是预期） | 本机 zstandard 0.25.0 |
 
 ## 版本基线（2026-11-12）
 
@@ -30,15 +32,19 @@ OneBot         127.0.0.1:3000 HTTP / 3001 WS / 6099 WebUI   均 token 为空、�
 
 ## 没在这儿的（有意）
 
-- **QQ 主体 482M + 195M**：太大，只记 sha256。真要重装，去 QQ 官网下 **必须同版本** 的 linux deb/tar，版本对不上注入就崩。
 - **`/opt/qq-agent` 源码**：在 git（`Cooper19132/big_fat_whale`），不用备。
 - **`data/` 运行态**：每日 tar 备份（`/home/admin/backups/qq-agent-*.tar.gz`，926K，留 30 天）。
+- **QQ 的账号登录态**：在 `QQ/napcat/config` 之外的 `QQ/data` 里是有 db 的，已在 QQ 整包内；但**登录态过期要重新扫码**，这个备份救不回来。
 
 ## 恢复流程（服务器重建时）
 
 ```bash
-# 1. QQ 装回 3.2.34-53644，确认 /root/Napcat/opt/QQ/qq 的 sha256 与清单一致
-sha256sum /root/Napcat/opt/QQ/qq
+# 1. QQ 整包还原（不用去官网找老版本了）
+sudo rm -rf /root/Napcat/opt/QQ.bak && sudo mv /root/Napcat/opt/QQ /root/Napcat/opt/QQ.bak
+sudo mkdir -p /root/Napcat/opt && sudo tar --use-compress-program="zstd -d" -xf qq-3.2.34-53644-YYYY-MM-DD.tar.zst -C /root/Napcat/opt
+sudo chmod 755 /root/Napcat/opt/QQ/qq
+# 校验必须是这一版
+sha256sum /root/Napcat/opt/QQ/qq   # 期望 ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2
 
 # 2. 解 NapCat 运行时（覆盖到同一路径）
 sudo tar xzf napcat-runtime-YYYY-MM-DD.tar.gz -C /root/Napcat/opt/QQ/resources/app/app_launcher/

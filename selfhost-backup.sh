@@ -33,6 +33,24 @@ echo "== 2. 清单 + 校验和 =="
 chmod 644 "$B/manifest-$D.txt"
 echo "    manifest $(wc -l < "$B/manifest-$D.txt") 行"
 
+echo "== 2b. QQ 整包（仅当版本 sha 变了才重打，留最近 2 份）=="
+QSH=$(sudo sha256sum $Q/qq | cut -d' ' -f1)
+if ls "$B"/qq-*.tar.zst >/dev/null 2>&1 && grep -l "$QSH" "$B"/qq-*.tar.zst.sha256 2>/dev/null | head -1 | grep -q .; then
+  # sha256 文件里不会写 qq 二进制的 sha，这里改用 manifest 里的 qq_sha256 比对
+  if grep -q "qq_sha256: $QSH" "$B"/manifest-*.txt 2>/dev/null; then
+    echo "    已有同版本 QQ 包，跳过"
+  fi
+else
+  VER=$(sudo sh -c "grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+-[0-9]\+' /root/Napcat/opt/QQ/resources/app/package.json | head -1")
+  VER=${VER:-unknown}
+  echo "    打包 QQ $VER …"
+  nice -n 15 sudo tar --use-compress-program="zstd -3 -T2" -cf "$B/qq-$VER-$D.tar.zst" -C /root/Napcat/opt QQ
+  sudo chown admin:admin "$B/qq-$VER-$D.tar.zst"
+  sha256sum "$B/qq-$VER-$D.tar.zst" > "$B/qq-$VER-$D.tar.zst.sha256"
+  ls -lh "$B/qq-$VER-$D.tar.zst" | awk '{print "   ", $5, $9}'
+  ls -1t "$B"/qq-*.tar.zst 2>/dev/null | tail -n +3 | xargs -r sudo rm -f
+fi
+
 echo "== 3. qq-agent 依赖冻结包 =="
 sudo tar czf "$B/qq-agent-node_modules-$D.tar.gz" -C /opt/qq-agent node_modules package-lock.json 2>/dev/null
 sudo chown admin:admin "$B/qq-agent-node_modules-$D.tar.gz"

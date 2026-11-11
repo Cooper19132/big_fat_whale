@@ -16,3 +16,10 @@ qq-agent deps:
 node: v22.14.0  npm: 10.9.2  python: Python 3.10.12
 chrome: Google Chrome 156.0.8078.73 
 ffmpeg: 4.4.2-0ubuntu0.22.04.1
+
+# QQ 整包快照（2026-11-12 追加）
+qq_package: qq-3.2.34-53644-2026-11-12.tar.zst
+qq_package_bytes: 275M (288,148,xxx)  解压后 726M / 2396 条目
+qq_package_sha256: 5943d594e93b6e058c149233f11bf5ba41a71ae63b5828b21276f8d215a2aa0f
+qq_package_sha_local: 一致（PC 侧校验通过）
+qq_package_note: 含 QQ/qq 主程序与已注入的 resources/app/app_launcher/napcat
