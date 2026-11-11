@@ -1,0 +1,18 @@
+date: 2026-11-12
+host: iZbp1dc3zy38xfqj8390rzZ 5.15.0-142-generic
+qq_binary: 204344328 bytes, mtime 2026-09-22 18:43:59.000000000 +0800
+qq_sha256: ae67432744180adc2b6567aa61b9575b14b28745f57b377a2853a1b744299ec2
+napcat.mjs_sha256: f80e4be3e8640369d23846cf3e8bcfd2a5b6dc5920f50d7ad733d7cca18179e6
+loadNapCat_sha256: 3d272756b14175c1e603261da6d8180e69f3435cbbd73baaf0542ea52f12330f
+native:
+  - dpapi
+  - ffmpeg
+  - napi2native
+  - packet
+  - pty
+onebot11.json:
+qq-agent deps:
+{"js-yaml":"^5.4.1","qrcode":"^1.5.4","undici":"^6.28.0","ws":"^8.18.0"}
+node: v22.14.0  npm: 10.9.2  python: Python 3.10.12
+chrome: Google Chrome 156.0.8078.73 
+ffmpeg: 4.4.2-0ubuntu0.22.04.1
