@@ -413,6 +413,27 @@ export function buildPastState(store, chatKey, { excludeIds = [] } = {}) {
   return { text, count: lines.length, truncated };
 }
 
+/** 她自己的口头结构配额：最近 N 条自己消息里，「比…还」「一…就」这类工整句式用了几次。 */
+const TIC_PATTERNS = [
+  [/比[^，。]{1,12}还/, '「比…还…」的对比'],
+  [/一[^，。]{1,5}就/, '「一…就…」的句式'],
+  [/[^？?。]{0,10}(挺|很|还算)(?!不)[^，。]{1,4}/, '「挺/很＋形容词」的评价']
+];
+
+export function recentTics(store, chatKey, { limit = 60 } = {}) {
+  try {
+    const mine = store.recent(chatKey, { limit }).filter((m) => m && m.self);
+    if (mine.length < 12) return [];
+    const hits = [];
+    for (const [re, name] of TIC_PATTERNS) {
+      const n = mine.filter((m) => re.test(String(m.text || ''))).length;
+      const pct = (n / mine.length) * 100;
+      if (n >= 3 && pct >= 3) hits.push(`${name}最近 ${mine.length} 条里用了 ${n} 次（${pct.toFixed(0)}%）`);
+    }
+    return hits;
+  } catch { return []; }
+}
+
 function triggerLabels(entry, ctx) {
   const labels = [];
   const text = String(entry?.text ?? '');
@@ -491,6 +512,14 @@ export function buildUserPrompt(ctx) {
     stateLines.push('你最近没有发过言');
   }
   parts.push(`【此刻状态】\n${stateLines.join('\n')}`);
+
+  // 口头结构配额：她自己的话里哪几种句式已经用滥了，直接摆出来让她换（比写在人设里更硬）
+  try {
+    const tics = recentTics(ctx.store, ctx.chatKey, { limit: 60 });
+    if (tics.length) {
+      parts.push(`【换个说法】${tics.join('；')}。这条别再用了，换成具体动作、次数或你自己的反应。`);
+    }
+  } catch { /* 统计坏了不影响说话 */ }
 
   // 暗涌：情绪是状态不是记忆——这里给的是「此刻的她」，不是检索回来的过去
   try {
