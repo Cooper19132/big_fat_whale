@@ -379,7 +379,12 @@ export function buildPastState(store, chatKey, { excludeIds = [] } = {}) {
   let messages = store.recent(chatKey, { limit: limit + exclude.size }).filter((m) => !exclude.has(m.id));
   messages = messages.slice(-limit);
   const now = Date.now();
-  let lines = messages.map((m) => ({ m, line: formatEntry(m, { withId: (m.media || []).length > 0 }) }));
+  // 已读消息也要能被引用：最近 pastStateIdLimit 条（默认 30）一律带 #id。
+  // 之前只有带图消息带 id，导致她想回一句纯文本的已读消息时找不到 id，只能去借未读里的卡片，
+  // 群里就会看到「引用栏是空的、只剩一串数字」。
+  const idLimit = Math.max(0, Number(cfg.pastStateIdLimit ?? 30));
+  const idFrom = Math.max(0, messages.length - idLimit);
+  let lines = messages.map((m, i) => ({ m, line: formatEntry(m, { withId: (m.media || []).length > 0 || i >= idFrom }) }));
   // 从头部丢弃超预算的行
   let droppedByChars = 0;
   while (lines.length > 1 && lines.reduce((sum, l) => sum + l.line.length + 1, 0) > maxChars) {
@@ -603,7 +608,7 @@ export function buildUserPrompt(ctx) {
   parts.push([
     '【引导说明】',
     '- 扫一眼【过去状态】和【本次唤醒】，判断：有没有人在找你？有没有你能接的话题？值不值得说话？',
-    '- 想说话：调用 send_message（要分条就传数组）。想引用就带 replyToMessageId：id 见【本次唤醒】每条前的 #数字、历史里带图消息的 #数字，或用 get_recent_messages 查，不要自己编。',
+    '- 想说话：调用 send_message（要分条就传数组）。想引用就带 replyToMessageId，id 就是每条消息前面的 #数字（【本次唤醒】里全都有，已读里最近 30 条和带图的消息也有）。没有 #数字 的消息就别引用，更不要自己编 id——编出来的 id 在 QQ 里会显示成空引用。',
     '- 不想说话：直接结束或调用 finish（一句话说明原因）。不回是正常选项，不是失职。',
     '- 记得：你的普通文本输出不会发到 QQ，只有工具调用会。',
     '',

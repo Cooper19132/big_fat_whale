@@ -16,11 +16,18 @@ DESC="${3:-}"
 SSHOPT=(-i ssh/id_ed25519 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=D:/dshworks/qqbot/ssh/known_hosts -o ConnectTimeout=15 -o BatchMode=yes)
 HOST=admin@116.62.149.191
 
+# 远端 shell 会把 ssh 命令里的参数按空格重新拆词，所以变量一律 base64 传（无空格、无引号地狱）
+b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
+NB=$(b64 "$NAME"); VB=$(b64 "$VIS"); DB=$(b64 "$DESC")
+
 echo "[1/3] 建 GitHub 仓库 $NAME ($VIS) …"
-timeout 90 ssh "${SSHOPT[@]}" "$HOST" NAME="$NAME" VIS="$VIS" DESC="$DESC" 'bash -s' <<'REMOTE'
+timeout 90 ssh "${SSHOPT[@]}" "$HOST" NB="$NB" VB="$VB" DB="$DB" 'bash -s' <<'REMOTE'
+NAME=$(printf '%s' "$NB" | base64 -d)
+VIS=$(printf '%s' "$VB" | base64 -d)
+DESC=$(printf '%s' "$DB" | base64 -d)
 TOK=$(cat /home/admin/.gh-token)
 PRIV=$([ "$VIS" = private ] && echo true || echo false)
-payload=$(printf '{"name":"%s","private":%s,"description":"%s","auto_init":false}' "$NAME" "$PRIV" "$DESC")
+payload=$(NAME="$NAME" VIS="$VIS" DESC="$DESC" python3 -c 'import json,os;print(json.dumps({"name":os.environ["NAME"],"private":os.environ["VIS"]=="private","description":os.environ["DESC"],"auto_init":False}))')
 resp=$(curl -s -m 25 -X POST https://api.github.com/user/repos \
   -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.github+json" \
   -H 'Content-Type: application/json' -d "$payload")
@@ -28,27 +35,20 @@ printf '%s' "$resp" | python3 -c "import sys,json;d=json.load(sys.stdin);print('
 REMOTE
 
 echo "[2/3] 建服务器中转 bare + 钩子 …"
-timeout 90 ssh "${SSHOPT[@]}" "$HOST" NAME="$NAME" 'bash -s' <<'REMOTE'
+timeout 90 ssh "${SSHOPT[@]}" "$HOST" NB="$NB" 'bash -s' <<'REMOTE'
+NAME=$(printf '%s' "$NB" | base64 -d)
 BARE=/home/admin/git-relay/$NAME.git
 git init --bare -q "$BARE" 2>/dev/null
-cat > "$BARE/hooks/post-receive" <<'EOS'
-#!/bin/sh
-TOK=$(cat /home/admin/.gh-token)
-REPO=$(basename "$PWD" .git)
-cd "$PWD" || exit 0
-OUT=$(git push --quiet "https://x-access-token:$TOK@github.com/Cooper19132/$REPO.git" "refs/heads/*:refs/heads/*" 2>&1) || {
-  curl -s -m 8 -X POST http://127.0.0.1:3000/send_private_msg -H 'Content-Type: application/json' \
-    -d "{\"user_id\":246695065,\"message\":\"[git relay] $REPO 推 GitHub 失败：$OUT\"}" >/dev/null 2>&1
-  echo "relay: 失败 $OUT"; exit 0
-}
-echo "relay: 已同步 GitHub"
-EOS
-chmod 700 "$BARE/hooks/post-receive"
+if [ -x /home/admin/git-relay/relay-sync.sh ]; then
+  install -m 755 /home/admin/git-relay/relay-hook.sh "$BARE/hooks/post-receive"
+else
+  echo "  ! 缺 /home/admin/git-relay/relay-sync.sh（先 scp 这两个脚本上去）" >&2
+fi
 echo "  → $BARE"
 REMOTE
 
 echo "[3/3] 本地接上（在目标仓库里执行下面两条）"
 cat <<TIPS
   git remote add origin ssh://$HOST/home/admin/git-relay/$NAME.git
-  git -c core.sshCommand="ssh -i ssh/id_ed25519" push -u origin main
+  git -c core.sshCommand="ssh -i D:/dshworks/qqbot/ssh/id_ed25519 -o UserKnownHostsFile=D:/dshworks/qqbot/ssh/known_hosts -o StrictHostKeyChecking=accept-new -o BatchMode=yes" push -u origin main
 TIPS

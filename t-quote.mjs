@@ -1,0 +1,11 @@
+import { buildPastState } from '/opt/qq-agent/src/prompt.js';
+const mk = (i) => ({ id: `c-${i}`, mid: 100000 + i, chatKey: 'group:1', senderId: 246695065, senderName: '主人', text: `第${i}条纯文本`, ts: Date.now() - (40 - i) * 60000, media: [] });
+const msgs = Array.from({ length: 40 }, (_, i) => mk(i));
+const store = { recent: () => msgs };
+const r = buildPastState(store, 'group:1');
+const lines = r.text.split('\n');
+console.log('总行数', lines.length);
+const withId = lines.filter((l) => /#\d+/.test(l)).length;
+console.log('带 #id 的行数', withId, '（期望 30）');
+console.log('最早一条：', lines[0]);
+console.log('最后一条：', lines[lines.length - 1]);

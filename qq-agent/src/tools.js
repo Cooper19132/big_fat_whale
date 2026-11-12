@@ -875,11 +875,31 @@ export function buildToolDefs() {
           // 群聊默认用 QQ 的「引用回复」发出去：模型没显式指定 replyToMessageId 时，
           // 自动引用本次唤醒的最新一条别人的消息，保证群里每条回话都挂在被回的那条下面。
           let replyTo = args.replyToMessageId ?? null;
+          // 自动引用收窄：只有「同一批里有两个以上不同的人在叫你」时才自动挂引用。
+          // 之前群里每条都自动引用最新一条，被引对象是卡片/已失效消息时 QQ 会渲染成
+          // 「空引用栏 + 一串数字」，看起来像机器人抽风。
           if ((replyTo === null || replyTo === '') && String(ctx.chatKey || '').startsWith('group:')
               && getConfig().groupQuoteReply !== false) {
             const trig = Array.isArray(ctx.session?.trigger) ? ctx.session.trigger : [];
-            const lastTrig = [...trig].reverse().find((m) => m && m.mid != null && !m.self);
-            if (lastTrig) replyTo = lastTrig.mid;
+            const others = trig.filter((m) => m && m.mid != null && !m.self);
+            const senders = new Set(others.map((m) => String(m.senderId ?? m.mid)));
+            if (senders.size >= 2) {
+              const lastTrig = others[others.length - 1];
+              if (lastTrig) replyTo = lastTrig.mid;
+            }
+          }
+          // 引用 id 必须是我们确实见过的消息，编出来的 id 在 QQ 里就是空引用
+          if (replyTo !== null && replyTo !== '') {
+            const known = new Set();
+            const seen = Array.isArray(ctx.session?.trigger) ? ctx.session.trigger : [];
+            for (const m of seen) if (m && m.mid != null) known.add(String(m.mid));
+            try {
+              for (const m of ctx.store.recent(ctx.chatKey, { limit: 200 })) if (m && m.mid != null) known.add(String(m.mid));
+            } catch { /* 读不到就只信任 trigger */ }
+            if (!known.has(String(replyTo).trim())) {
+              ctx.emit?.('log', { level: 'warn', message: `[send] 引用 id ${replyTo} 不在本会话最近消息里，已丢弃引用` });
+              replyTo = null;
+            }
           }
           const result = await ctx.sender.sendTextBatch(ctx.chatKey, messages, {
             replyToMessageId: replyTo,
@@ -946,11 +966,31 @@ export function buildToolDefs() {
           }
           // 群聊默认带引用，与 send_message 保持一致
           let replyTo = args.replyToMessageId ?? null;
+          // 自动引用收窄：只有「同一批里有两个以上不同的人在叫你」时才自动挂引用。
+          // 之前群里每条都自动引用最新一条，被引对象是卡片/已失效消息时 QQ 会渲染成
+          // 「空引用栏 + 一串数字」，看起来像机器人抽风。
           if ((replyTo === null || replyTo === '') && String(ctx.chatKey || '').startsWith('group:')
               && getConfig().groupQuoteReply !== false) {
             const trig = Array.isArray(ctx.session?.trigger) ? ctx.session.trigger : [];
-            const lastTrig = [...trig].reverse().find((m) => m && m.mid != null && !m.self);
-            if (lastTrig) replyTo = lastTrig.mid;
+            const others = trig.filter((m) => m && m.mid != null && !m.self);
+            const senders = new Set(others.map((m) => String(m.senderId ?? m.mid)));
+            if (senders.size >= 2) {
+              const lastTrig = others[others.length - 1];
+              if (lastTrig) replyTo = lastTrig.mid;
+            }
+          }
+          // 引用 id 必须是我们确实见过的消息，编出来的 id 在 QQ 里就是空引用
+          if (replyTo !== null && replyTo !== '') {
+            const known = new Set();
+            const seen = Array.isArray(ctx.session?.trigger) ? ctx.session.trigger : [];
+            for (const m of seen) if (m && m.mid != null) known.add(String(m.mid));
+            try {
+              for (const m of ctx.store.recent(ctx.chatKey, { limit: 200 })) if (m && m.mid != null) known.add(String(m.mid));
+            } catch { /* 读不到就只信任 trigger */ }
+            if (!known.has(String(replyTo).trim())) {
+              ctx.emit?.('log', { level: 'warn', message: `[send] 引用 id ${replyTo} 不在本会话最近消息里，已丢弃引用` });
+              replyTo = null;
+            }
           }
           const result = await ctx.sender.sendSticker(ctx.chatKey, sticker, {
             replyToMessageId: replyTo,

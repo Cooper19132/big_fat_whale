@@ -1,16 +1,9 @@
 #!/bin/sh
-# 收到推送后转手同步到 GitHub（家宽到 github.com 不稳，用服务器中转）
-TOK=$(cat /home/admin/.gh-token 2>/dev/null)
-[ -z "$TOK" ] && { echo "relay: 没有 token"; exit 0; }
-cd /home/admin/git-relay/big_fat_whale.git || exit 0
-URL="https://x-access-token:$TOK@github.com/Cooper19132/big_fat_whale.git"
-OUT=$(git push --quiet "$URL" 'refs/heads/*:refs/heads/*' 2>&1)
-RC=$?
-if [ $RC -eq 0 ]; then
-  echo "relay: 已同步 GitHub"
-else
-  echo "relay: 同步失败 rc=$RC $OUT"
-  curl -s -m 8 -X POST http://127.0.0.1:3000/send_private_msg -H 'Content-Type: application/json' \
-    -d "{\"user_id\":246695065,\"message\":\"[git relay] 推 GitHub 失败：$OUT\"}" >/dev/null 2>&1
-fi
+# 通用 post-receive：只做一件事——把收到的推送转交给后台同步脚本
+# 装在 /home/admin/git-relay/<REPO>.git/hooks/post-receive，chmod 755
+# 不阻塞推送方：逻辑在 relay-sync.sh 里跑，带退避重试与日志
+
+cat >/dev/null 2>&1 || true
+REPO=$(basename "$PWD" .git)
+setsid /home/admin/git-relay/relay-sync.sh "$REPO" >/dev/null 2>&1 &
 exit 0
