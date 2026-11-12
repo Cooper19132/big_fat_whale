@@ -204,10 +204,11 @@ async function flattenNodes(onebot, nodes, { maxItems = 30, maxChars = 2000, dep
     let shown = text;
     if (images && images.length) {
       const marks = [];
+      const nodeMid = n?.message_id ?? n?.messageId ?? n?.msg_id ?? n?.id ?? null;
       for (const u of images) {
         if (gallery.size >= 8) break;           // 最多 8 张，避免撑爆上下文
         const no = gallery.size + 1;
-        gallery.set(no, u);
+        gallery.set(no, { url: u, mid: nodeMid });
         marks.push(`[图${no}]`);
       }
       shown = shown.replace(/\[图片\]/g, () => marks.shift() || '[图片]');
@@ -247,7 +248,7 @@ export async function readForwardDeep(onebot, id, { maxItems = 30, maxChars = 20
   await flattenNodes(onebot, nodes, { maxItems, maxChars, depth: 0, budget, lines, chars, gallery });
   if (gallery.size) {
     lines.push('[转发里的图片（要看用 view_image 传对应链接）]');
-    lines.push([...gallery.entries()].map(([no, u]) => `图${no} = ${u}`).join('\n'));
+    lines.push([...gallery.entries()].map(([no, g]) => (g && typeof g === 'object' ? `图${no} = ${g.url}${g.mid ? `  (#${g.mid})` : ''}` : `图${no} = ${g}`)).join('\n'));
   }
   return { text: lines.join('\n'), count: lines.length, total: nodes.length };
 }
@@ -277,7 +278,7 @@ export async function flattenSegmentsInline(onebot, segments, { maxItems = 24, m
     }
   }
   if (gallery.size) {
-    const tail = [...gallery.entries()].map(([no, u]) => `图${no} = ${u}`).join('\n');
+    const tail = [...gallery.entries()].map(([no, g]) => (g && typeof g === 'object' ? `图${no} = ${g.url}${g.mid ? `  (#${g.mid})` : ''}` : `图${no} = ${g}`)).join('\n');
     lines.push('[转发里的图片（要看用 view_image 传对应链接）]');
     lines.push(tail);
   }

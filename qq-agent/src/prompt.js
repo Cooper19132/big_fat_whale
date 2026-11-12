@@ -393,7 +393,24 @@ export function buildPastState(store, chatKey, { excludeIds = [] } = {}) {
   }
   // 窗口是否已经装不下更早的消息（条数到上限 或 字符预算被迫丢行）
   const truncated = messages.length >= limit || droppedByChars > 0;
-  return { text: lines.map((l) => l.line).join('\n'), count: lines.length, truncated };
+  // 图片消息也给一张「#mid → 链接」的索引：正文里只剩 [图片]，没有链接她既看不了画面、
+  // 也没法指着那张图说话。这里把最近窗口里带图的消息倒序列出（最多 4 条，链接截 150 字符）。
+  const imgRows = [];
+  for (let i = lines.length - 1; i >= 0 && imgRows.length < 4; i -= 1) {
+    const m = lines[i].m;
+    for (const im of (m.media || [])) {
+      if (!im || im.kind !== 'image') continue;
+      const u = String(im.url || im.file || '').trim();
+      if (!u) continue;
+      imgRows.push(`图 @#${m.mid ?? '?'} = ${u.length > 150 ? `${u.slice(0, 150)}…` : u}`);
+      if (imgRows.length >= 4) break;
+    }
+  }
+  let text = lines.map((l) => l.line).join('\n');
+  if (imgRows.length) {
+    text += '\n[已读里的图片（看画面：view_image 传链接；要指着那张图说话：replyToMessageId 用前面的 #号）]\n' + imgRows.join('\n');
+  }
+  return { text, count: lines.length, truncated };
 }
 
 function triggerLabels(entry, ctx) {
@@ -418,7 +435,22 @@ export function buildTriggerBlock(triggerEntries, ctx) {
     const labelStr = labels.length ? `（${labels.join('/')}）` : '';
     lines.push(`${formatEntry(m)}${labelStr}`);
   }
-  return lines.join('\n');
+  let text = lines.join('\n');
+  const imgRows = [];
+  for (let i = triggerEntries.length - 1; i >= 0 && imgRows.length < 4; i -= 1) {
+    const m = triggerEntries[i];
+    for (const im of (m.media || [])) {
+      if (!im || im.kind !== 'image') continue;
+      const u = String(im.url || im.file || '').trim();
+      if (!u) continue;
+      imgRows.push(`图 @#${m.mid ?? '?'} = ${u.length > 150 ? `${u.slice(0, 150)}…` : u}`);
+      if (imgRows.length >= 4) break;
+    }
+  }
+  if (imgRows.length) {
+    text += '\n[这几条里的图片（看画面：view_image 传链接；要指着那张图说话：replyToMessageId 用前面的 #号）]\n' + imgRows.join('\n');
+  }
+  return text;
 }
 
 /**
@@ -608,7 +640,7 @@ export function buildUserPrompt(ctx) {
   parts.push([
     '【引导说明】',
     '- 扫一眼【过去状态】和【本次唤醒】，判断：有没有人在找你？有没有你能接的话题？值不值得说话？',
-    '- 想说话：调用 send_message（要分条就传数组）。想引用就带 replyToMessageId，id 就是每条消息前面的 #数字（【本次唤醒】里全都有，已读里最近 30 条和带图的消息也有）。没有 #数字 的消息就别引用，更不要自己编 id——编出来的 id 在 QQ 里会显示成空引用。',
+    '- 想说话：调用 send_message（要分条就传数组）。想引用就带 replyToMessageId，id 就是每条消息前面的 #数字（【本次唤醒】里全都有，已读里最近 30 条和带图的消息也有）。没有 #数字 的消息就别引用，更不要自己编 id——编出来的 id 在 QQ 里会显示成空引用。带图的消息会在末尾附「图 @#号 = 链接」，要引用那张图就用那个 #号，要看画面就把链接交给 view_image。',
     '- 不想说话：直接结束或调用 finish（一句话说明原因）。不回是正常选项，不是失职。',
     '- 记得：你的普通文本输出不会发到 QQ，只有工具调用会。',
     '',
