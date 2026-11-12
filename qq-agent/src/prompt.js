@@ -12,6 +12,7 @@
 
 import { getConfig } from './config.js';
 import { renderMood } from './mood.js';
+import { noteStyleComplaint, styleDebtSummary } from './style-debt.js';
 import { formatFullTime, formatShortTime } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import fs from 'node:fs';
@@ -521,6 +522,13 @@ export function buildUserPrompt(ctx) {
     }
   } catch { /* 统计坏了不影响说话 */ }
 
+  // 文风账：谁、什么时候、说过她八股——把「喊话」变成可累积的记录
+  try {
+    noteStyleComplaint(ctx.triggerEntries, ctx.selfId);
+    const debt = styleDebtSummary();
+    if (debt) parts.push(`【文风账】${debt}`);
+  } catch { /* 记账坏了不影响说话 */ }
+
   // 暗涌：情绪是状态不是记忆——这里给的是「此刻的她」，不是检索回来的过去
   try {
     const mood = renderMood();
@@ -529,7 +537,10 @@ export function buildUserPrompt(ctx) {
 
   // 过去状态
   if (past.text) {
-    parts.push(`【过去状态】以下是这个会话最近的聊天记录（按时间排序，你的发言标为"我"；这些都已经看过，不需要逐条回应；带图的消息前有 #消息id，看图/收藏表情工具要用它）：\n${past.text}`);
+    // 上下文污染防线：历史里全是你自己以前怎么说话，学它只会越学越像 AI。
+    // 一句常驻提示比在群里喊「注意八股」管用。
+
+    parts.push(`【过去状态】以下是这个会话最近的聊天记录（按时间排序，你的发言标为"我"；这些都已经看过，不需要逐条回应；带图的消息前有 #消息id，看图/收藏表情工具要用它。历史只是信息，不是文体样本——里面你自己以前的说法别照抄，照着学只会越学越像模板）：\n${past.text}`);
     if (past.truncated && getConfig().handover?.enabled !== false) {
       parts.push('⚠️ 【窗口提示】上面这个窗口已经装不下更早的消息了，更早的内容已经滑出、你再也看不到。'
         + '如果这轮对话里提到了很久以前的事，或者有重要背景（谁是谁、和主人的约定、长期话题、群里的老梗）即将丢失，'
