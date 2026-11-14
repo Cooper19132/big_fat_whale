@@ -85,3 +85,17 @@ upload_group_file  upload_private_file
 
 非标准的只有 **poke 三件套**（`friend_poke` / `group_poke` / `send_poke`）和文件下载（`get_file`）。也就是说
 换成 Lagrange.OneBot 或别的 OneBot v11 实现，改动面 ≈ 一个 adapter 文件，不用重写机器人。
+
+## 上游 git 镜像（2026-11-15）
+
+- `qq-bridge-mirror-2026-11-15.tar.zst`（18M，sha256 `9949bb779d10341ed87de0e1f4513daf4b14c60b878f336e3a0b6cbb05b2edbd`）
+- 内容：Derpyu520/qq-bridge 的 **完整 git 镜像**（`git clone --mirror`，HEAD `781e02f2`，含全部分支、PR ref、历史）
+- 用途：上游 2026-11-18 归档后仍可查历史实现；本项目运行**不依赖**它
+- 恢复：`tar xf qq-bridge-mirror-2026-11-15.tar.zst && git clone qq-bridge.git qq-bridge-src`
+- 另有一份在 GitHub release `upstream-mirror-2026-11-15`（release id 445417467）
+
+## NapCat 源码快照（2026-11-15）
+
+- `NapCatQQ-src-2026-11-15.tar.gz`（89M，sha256 `604d1731b3c92092814473c099ce2c655f1d086d9257b34eee6077840d16c968`）
+- 官方仓库 `NapNeko/NapCatQQ` 已被抹成「1 个分支 + 1 个 README」，本快照取自活跃 fork `dgcrxs/NapCatQQ` 的 `main`（1312 条目、25 个 package.json）
+- 用途：要改 NapCat 行为时当参照；**日常运行只认 `napcat-runtime-2026-11-12.tar.gz` + sha256 基线**

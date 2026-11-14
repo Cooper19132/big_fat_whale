@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **本仓库是唯一维护源。** 上游 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 已公告停止维护、
+> 预计 2026-11-18 归档；本项目的依赖、QQ/NapCat 运行时、上游 git 镜像都已在本地留底。
+> 详见仓库根目录 [UPSTREAM.md](../UPSTREAM.md)，离线重建用 `tools/restore-offline.sh`。
+
 # QQ Agent（独立版 · 桌面端）
 
 从 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 彻底改造而来的独立 QQ agent 应用：
