@@ -1,7 +1,14 @@
 #!/bin/sh
-# 服务器中转同步：把 /home/admin/git-relay/<REPO>.git 推到 GitHub
-# 用法：relay-sync.sh <REPO>      （由各 bare 仓库的 hooks/post-receive 后台调用）
-# 特点：退避重试、分叉单独判定、日志落盘、告警去重（同库 30 分钟一次）
+# relay-sync v2 · 2026-11-14
+# 目标：把「一次推送失败」和「仓库真的落后」彻底分开，杜绝误报。
+#
+#   0) 推之前先对账：远端 sha == 本地 sha 就直接退出，不做无谓推送、不产生失败
+#   1) 认证类报错先验 token（api.github.com 200 = token 好）→ 好就判链路抖动，继续退避重试
+#   2) 所有重试都失败 → 再对账一次：其实已经同步上就静默收工
+#   3) 真落后才进「待确认」：持续满 30 分钟仍落后才告警；同仓 6 小时内最多一条
+#   4) 配合 cron 每 15 分钟的补偿同步，抖动过去后自动追平，根本轮不到告警
+#
+# 用法：relay-sync.sh <仓库名>
 
 set -u
 REPO="${1:?用法: relay-sync.sh <仓库名>}"
@@ -9,8 +16,10 @@ OWNER=Cooper19132
 BASE=/home/admin/git-relay
 BARE="$BASE/$REPO.git"
 LOG="$BASE/relay.log"
-STAMP="$BASE/.alert-$REPO"
 TOK_FILE=/home/admin/.gh-token
+ALERT_STAMP="$BASE/.alert-$REPO"
+PEND_FILE="$BASE/.pending-$REPO"
+NOTIFY=/home/admin/scripts/notify.sh
 
 ts() { date '+%F %T'; }
 log() { echo "$(ts) $REPO $*" >> "$LOG"; }
@@ -19,60 +28,120 @@ log() { echo "$(ts) $REPO $*" >> "$LOG"; }
 [ -s "$TOK_FILE" ] || { log "失败：token 文件缺失或为空"; exit 1; }
 TOK=$(tr -d '\r\n' < "$TOK_FILE")
 URL="https://x-access-token:$TOK@github.com/$OWNER/$REPO.git"
-# token 是否真的无效：api.github.com 很稳，用它区分「真认证失败」与「链路抖动被 git 误报成 401」
+
+if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 2097152 ]; then
+  mv -f "$LOG" "$LOG.1"
+fi
+
+# token 是否真的无效：api.github.com 很稳，用它区分「真认证失败」与「抖动被 git 误报成 401」
 token_ok() {
   code=$(curl -s -o /dev/null -m 12 -w '%{http_code}' \
     -H "Authorization: token $TOK" https://api.github.com/rate_limit 2>/dev/null)
   [ "$code" = "200" ]
 }
 
-# 日志超过 2MB 就切一份旧的
-if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 2097152 ]; then
-  mv -f "$LOG" "$LOG.1"
+# 分支探测：bare 的 HEAD 可能指向不存在的 master（老仓库遗留），别信它
+BRANCH=$(git -C "$BARE" symbolic-ref --short HEAD 2>/dev/null || true)
+if [ -z "$BRANCH" ] || ! git -C "$BARE" rev-parse --verify "refs/heads/$BRANCH" >/dev/null 2>&1; then
+  BRANCH=""
+  for cand in main master; do
+    if git -C "$BARE" rev-parse --verify "refs/heads/$cand" >/dev/null 2>&1; then
+      BRANCH=$cand
+      break
+    fi
+  done
+fi
+[ -n "$BRANCH" ] || BRANCH=$(git -C "$BARE" for-each-ref --format='%(refname:short)' refs/heads | head -1)
+LOCAL=$(git -C "$BARE" rev-parse --verify "refs/heads/$BRANCH" 2>/dev/null)
+[ -n "$LOCAL" ] || { log "跳过：$BARE 里没有 $BRANCH 分支"; exit 0; }
+
+remote_sha() {
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true timeout 25 \
+    git ls-remote "$URL" "refs/heads/$BRANCH" 2>/dev/null | awk 'NR==1{print $1}'
+}
+
+# ── 0) 先对账：已经一致就别推 ──
+REMOTE=$(remote_sha)
+if [ "$REMOTE" = "$LOCAL" ]; then
+  if [ -f "$PEND_FILE" ]; then
+    log "已对齐（${LOCAL}），清掉待确认"
+    rm -f "$PEND_FILE"
+  else
+    log "已对齐（${LOCAL}），无需推送"
+  fi
+  exit 0
 fi
 
+# ── 1) 推送 + 退避重试 ──
 attempts=0
 last_out=""
-fatal_kind=""
 for delay in 0 10 30 60 180 300 600; do
   [ "$delay" -gt 0 ] && sleep "$delay"
   attempts=$((attempts + 1))
   last_out=$(cd "$BARE" && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
       timeout 120 git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=40 \
-      push --quiet "$URL" 'refs/heads/*:refs/heads/*' 2>&1)
+      push --quiet "$URL" "refs/heads/*:refs/heads/*" 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log "同步成功（第 ${attempts} 次尝试）"
-    rm -f "$STAMP"
+    [ -f "$PEND_FILE" ] && { log "待确认已清（追平）"; rm -f "$PEND_FILE"; }
+    rm -f "$ALERT_STAMP"
     exit 0
   fi
   one_line=$(printf '%s' "$last_out" | tail -2 | tr '\n' ' ' | cut -c1-300)
   log "第 ${attempts} 次失败 rc=${rc}: $one_line"
-  # 分叉 / 权限 / 认证问题：重试没用，立刻收手，交给人工
   case "$last_out" in
     *non-fast-forward*|*"fetch first"*|*"failed to push some refs"*)
-      fatal_kind="分叉"; break ;;
+      log "判定：分叉，停止重试交给人工"
+      break ;;
     *Authentication*failed*|*Permission*denied*|*"not found"*|*403*)
       if token_ok; then
-        log "第 ${attempts} 次报认证失败，但 token 有效 → 判为链路抖动，继续重试"
-        fatal_kind="链路抖动"
-        continue
-      fi
-      fatal_kind="认证或权限"; break ;;
+        log "报认证失败但 token 有效 → 判为链路抖动，继续重试"
+      else
+        log "判定：认证或权限（token 校验不过），停止重试"
+        break
+      fi ;;
   esac
 done
 
-# 告警：同库 30 分钟内只报一次
-now=$(date +%s)
-if [ ! -f "$STAMP" ] || [ $((now - $(stat -c %Y "$STAMP"))) -gt 1800 ]; then
-  touch "$STAMP"
-  reason="${fatal_kind:-网络}"
-  brief=$(printf '%s' "$last_out" | tail -1 | tr -d '"\\' | cut -c1-200)
-  msg="[git relay] ${REPO} 推 GitHub 失败（${reason}，共试 ${attempts} 次）：${brief}"
-  curl -s -m 10 -X POST http://127.0.0.1:3000/send_private_msg \
-    -H 'Content-Type: application/json' \
-    -d "{\"user_id\":246695065,\"message\":\"${msg}\"}" >/dev/null 2>&1
-  [ -x /home/admin/scripts/notify.sh ] && /home/admin/scripts/notify.sh "git 同步失败" "$msg" >/dev/null 2>&1
-  log "已告警（${reason}）"
+# ── 2) 收尾对账：失败不等于没同步上 ──
+REMOTE2=$(remote_sha)
+if [ "$REMOTE2" = "$LOCAL" ]; then
+  log "重试期间实际已同步（对账一致 ${LOCAL}），静默收工"
+  [ -f "$PEND_FILE" ] && rm -f "$PEND_FILE"
+  rm -f "$ALERT_STAMP"
+  exit 0
 fi
+
+# ── 3) 真落后：先进待确认，满 30 分钟才打扰 ──
+now=$(date +%s)
+first=0
+if [ -f "$PEND_FILE" ]; then first=$(cat "$PEND_FILE" 2>/dev/null || echo 0); fi
+if [ "$first" -eq 0 ] || [ "$first" -gt "$now" ]; then
+  first=$now
+  echo "$first" > "$PEND_FILE"
+  log "进入待确认：仍未落后于对账？远端=${REMOTE2:-未知} 本地=${LOCAL}（30 分钟内追平就不打扰）"
+  exit 0
+fi
+
+age=$(( now - first ))
+if [ "$age" -lt 1800 ]; then
+  log "仍落后，已持续 ${age}s（未满 30 分钟），不告警"
+  exit 0
+fi
+
+if [ -f "$ALERT_STAMP" ] && [ $(( now - $(stat -c %Y "$ALERT_STAMP") )) -lt 21600 ]; then
+  log "仍落后，但 6 小时内已告警过，跳过"
+  exit 0
+fi
+touch "$ALERT_STAMP"
+
+mins=$(( age / 60 ))
+brief=$(printf '%s' "$last_out" | tail -1 | tr -d '"\\' | cut -c1-160)
+msg="[git relay] ${REPO} 已落后 ${mins} 分钟未追平（远端 ${REMOTE2:-未知} / 本地 ${LOCAL}）：${brief}"
+curl -s -m 10 -X POST http://127.0.0.1:3000/send_private_msg \
+  -H 'Content-Type: application/json' \
+  -d "{\"user_id\":246695065,\"message\":\"${msg}\"}" >/dev/null 2>&1
+[ -x "$NOTIFY" ] && "$NOTIFY" "git 同步落后" "$msg" >/dev/null 2>&1
+log "已告警（真落后 ${mins} 分钟）"
 exit 0
