@@ -654,6 +654,31 @@ export function createApp({ log = console.log } = {}) {
         });
       }
 
+      // ── 自持运维：上游漂移 / 服务 / 备份 / 一键检查 ──
+      if (pathname === '/api/selfhost' && method === 'GET') {
+        const p = '/home/admin/backups/selfhost-status.json';
+        try {
+          if (!fs.existsSync(p)) return json(res, 200, { error: '还没有检查记录，点「立即检查」或等每日 05:00' });
+          const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+          try { data.health = JSON.parse(fs.readFileSync('/home/admin/backups/health.json', 'utf8')); } catch {}
+          return json(res, 200, data);
+        } catch (err) {
+          return json(res, 500, { error: String(err.message || err) });
+        }
+      }
+
+      if (pathname === '/api/selfhost/run' && method === 'POST') {
+        const out = await new Promise((resolve) => {
+          const child = spawn('/bin/bash', ['/home/admin/scripts/selfhost-check.sh'], { timeout: 120000 });
+          let buf = '';
+          child.stdout.on('data', (d) => { buf += d.toString(); });
+          child.stderr.on('data', (d) => { buf += d.toString(); });
+          child.on('close', (code) => resolve(`exit=${code}\n${buf}`));
+          child.on('error', (e) => resolve(`启动失败：${e.message}`));
+        });
+        return json(res, 200, { ok: true, output: out.slice(-4000) });
+      }
+
       // ── SnowLuma 进程管理 ──
       if (pathname === '/api/snowluma/launch' && method === 'POST') {
         try {

@@ -756,6 +756,29 @@ export class Orchestrator {
     }
 
 
+    // ── 定时任务空输出兜底（2026-11-14）────────────────────
+    // 掉线或模型空响应时，定时任务会静默失败（日志里只剩「消息内容为空」），
+    // 主人当晚什么都收不到。这里补一条极短兜底，并记 warn。
+    if (!session.error && status === 'noreply' && ctx.pushTask && String(ctx.chatKey || '').startsWith('private:')) {
+      try {
+        const promptTxt = String(ctx.pushTask.text || '');
+        let fallback = '';
+        if (/今天看过|看了什么|汇报/.test(promptTxt)) fallback = '今天没看。';
+        else if (ctx.pushTask.kind === 'self-watch') fallback = '';
+        else fallback = '这条我憋不出来，回头补。';
+        if (fallback) {
+          const rf = await ctx.sender.sendTextBatch(ctx.chatKey, fallback, {});
+          ctx.session.sent.push(...rf.sent.map((x) => ({ type: 'text', text: x.text })));
+          status = 'done';
+          this.emit('log', { level: 'warn', text: '[定时兜底] 模型没输出，已发兜底话: ' + fallback });
+        } else {
+          this.emit('log', { level: 'warn', text: '[定时兜底] self-watch 无输出，跳过（不打扰）' });
+        }
+      } catch (e) {
+        this.emit('log', { level: 'warn', text: '[定时兜底] 发送失败: ' + (e?.message || e) });
+      }
+    }
+
     this.sessions.finish(session.id, status);
     this.emit('session-end', {
       sessionId: session.id,
