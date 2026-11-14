@@ -19,6 +19,12 @@ log() { echo "$(ts) $REPO $*" >> "$LOG"; }
 [ -s "$TOK_FILE" ] || { log "失败：token 文件缺失或为空"; exit 1; }
 TOK=$(tr -d '\r\n' < "$TOK_FILE")
 URL="https://x-access-token:$TOK@github.com/$OWNER/$REPO.git"
+# token 是否真的无效：api.github.com 很稳，用它区分「真认证失败」与「链路抖动被 git 误报成 401」
+token_ok() {
+  code=$(curl -s -o /dev/null -m 12 -w '%{http_code}' \
+    -H "Authorization: token $TOK" https://api.github.com/rate_limit 2>/dev/null)
+  [ "$code" = "200" ]
+}
 
 # 日志超过 2MB 就切一份旧的
 if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 2097152 ]; then
@@ -28,11 +34,12 @@ fi
 attempts=0
 last_out=""
 fatal_kind=""
-for delay in 0 5 20 60 180 300; do
+for delay in 0 10 30 60 180 300 600; do
   [ "$delay" -gt 0 ] && sleep "$delay"
   attempts=$((attempts + 1))
   last_out=$(cd "$BARE" && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
-      timeout 120 git push --quiet "$URL" 'refs/heads/*:refs/heads/*' 2>&1)
+      timeout 120 git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=40 \
+      push --quiet "$URL" 'refs/heads/*:refs/heads/*' 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log "同步成功（第 ${attempts} 次尝试）"
@@ -46,6 +53,11 @@ for delay in 0 5 20 60 180 300; do
     *non-fast-forward*|*"fetch first"*|*"failed to push some refs"*)
       fatal_kind="分叉"; break ;;
     *Authentication*failed*|*Permission*denied*|*"not found"*|*403*)
+      if token_ok; then
+        log "第 ${attempts} 次报认证失败，但 token 有效 → 判为链路抖动，继续重试"
+        fatal_kind="链路抖动"
+        continue
+      fi
       fatal_kind="认证或权限"; break ;;
   esac
 done
@@ -60,6 +72,7 @@ if [ ! -f "$STAMP" ] || [ $((now - $(stat -c %Y "$STAMP"))) -gt 1800 ]; then
   curl -s -m 10 -X POST http://127.0.0.1:3000/send_private_msg \
     -H 'Content-Type: application/json' \
     -d "{\"user_id\":246695065,\"message\":\"${msg}\"}" >/dev/null 2>&1
-  log "已私聊告警（${reason}）"
+  [ -x /home/admin/scripts/notify.sh ] && /home/admin/scripts/notify.sh "git 同步失败" "$msg" >/dev/null 2>&1
+  log "已告警（${reason}）"
 fi
 exit 0
