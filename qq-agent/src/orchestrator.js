@@ -536,6 +536,7 @@ export class Orchestrator {
 
       const response = await chatCompletion({ messages, tools: openAiTools });
       session.model = response.model || session.model;
+      if (response.droppedImages) this.emit('log', { level: 'warn', text: '[图片降级] 模型不认这一轮的图片，已剥掉重试' });
       addUsage(session.usage, response.usage);
       session.usage.calls += 1;
       session.lastPromptTokens = Number(response.usage?.prompt_tokens) || session.lastPromptTokens || 0;
@@ -665,7 +666,10 @@ export class Orchestrator {
         let images = [];
         if (Array.isArray(result.content)) {
           contentStr = result.content.filter((p) => p.type === 'text').map((p) => p.text).join('\n');
-          images = result.content.filter((p) => p.type === 'image_url');
+          images = result.content.filter((p) => p.type === 'image_url'
+            && /^data:image\/(png|jpeg|gif|webp);base64,/i.test(p?.image_url?.url || ''));
+          const droppedImgs = result.content.filter((p) => p.type === 'image_url').length - images.length;
+          if (droppedImgs > 0) this.emit('log', { level: 'warn', text: `[图片过滤] ${name} 返回 ${droppedImgs} 张非 png/jpeg/gif/webp 图片，已丢掉` });
         } else {
           contentStr = String(result.content);
         }

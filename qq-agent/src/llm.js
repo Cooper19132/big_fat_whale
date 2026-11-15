@@ -14,6 +14,26 @@ function authHeaders(apiKey) {
  * 单次对话请求。messages 为 OpenAI 格式；tools 为 OpenAI function 格式（可为空）。
  * 返回 { message, usage, raw }；usage 形如 { prompt_tokens, completion_tokens, total_tokens }。
  */
+const IMG_PART_MIME = /^data:image\/(png|jpeg|gif|webp);base64,/i;
+
+function hasImagePart(m) {
+  return Array.isArray(m?.content) && m.content.some((p) => p && p.type === 'image_url');
+}
+
+function stripImages(messages) {
+  return messages.map((m) => {
+    if (!hasImagePart(m)) return m;
+    const kept = m.content.filter((p) => !(p && p.type === 'image_url'));
+    const text = kept.map((p) => (p.type === 'text' ? p.text : '')).join('\n').trim();
+    return { ...m, content: text || '（这一轮原本只有图片，图片未能发送）' };
+  });
+}
+
+function badImage(messages) {
+  return messages.some((m) => Array.isArray(m?.content)
+    && m.content.some((p) => p && p.type === 'image_url' && !IMG_PART_MIME.test(p?.image_url?.url || '')));
+}
+
 export async function chatCompletion({ messages, tools = null, toolChoice = 'auto', temperature = null, signal = null }) {
   const cfg = getConfig().api;
   const body = {
@@ -52,6 +72,30 @@ export async function chatCompletion({ messages, tools = null, toolChoice = 'aut
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    // 图片格式不认时整个回合都会被 400 打掉，比"这轮少一张图"糟得多：
+    // 剥掉图片重试一次，同时在返回里标 droppedImages，让上层记一笔。
+    const imgTrouble = res.status === 400 && /unsupported image|invalid image|image format/i.test(text)
+      && messages.some((m) => Array.isArray(m?.content) && m.content.some((p) => p && p.type === 'image_url'));
+    if (imgTrouble) {
+      const body2 = { ...body, messages: stripImages(messages) };
+      const r2 = await fetch(joinUrl(cfg.baseUrl, '/chat/completions'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders(cfg.apiKey) },
+        body: JSON.stringify(body2)
+      }).catch(() => null);
+      if (r2 && r2.ok) {
+        const d2 = await r2.json().catch(() => null);
+        const c2 = d2?.choices?.[0];
+        if (c2) {
+          return {
+            message: c2.message ?? null,
+            usage: d2?.usage ?? null,
+            raw: d2,
+            droppedImages: true
+          };
+        }
+      }
+    }
     throw new Error(`模型 API HTTP ${res.status}：${text.slice(0, 500)}`);
   }
   const data = await res.json().catch(() => { throw new Error('模型 API 返回了无法解析的 JSON'); });

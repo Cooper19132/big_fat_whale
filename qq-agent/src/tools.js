@@ -48,9 +48,12 @@ async function downloadImageWithHash(url, timeoutMs = 30000) {
   let lastError = null;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
-      const { buffer, contentType } = await safeFetchBinary(safeUrl);
-      if (!buffer || !buffer.length) throw new Error("图片内容为空");
-      const mime = detectMime(buffer) || String(contentType || "image/jpeg").split(";")[0];
+      const got = await safeFetchBinary(safeUrl);
+      if (!got.buffer || !got.buffer.length) throw new Error("图片内容为空");
+      const norm = await normalizeImage(got.buffer, got.contentType);
+      if (!norm) throw new Error(`图片格式不支持（${detectMime(got.buffer) || got.contentType || "未知"}）`);
+      const buffer = norm.buffer;
+      const mime = norm.mime;
       const hash = crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 24);
       return { dataUrl: `data:${mime};base64,${buffer.toString("base64")}`, hash, bytes: buffer.length };
     } catch (e) {
@@ -95,6 +98,39 @@ function detectMime(buf) {
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
   if (buf.toString('ascii', 0, 6) === 'GIF87a' || buf.toString('ascii', 0, 6) === 'GIF89a') return 'image/gif';
   if (buf.toString('ascii', 0, 8) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+// 模型端只认 png/jpeg/gif/webp。QQ 的图有时是 avif/heic/bmp，或者干脆回
+// application/octet-stream —— 这种 dataUrl 塞进请求里，整个回合会被 API 以
+// 400 "unsupported image" 打掉，连带这一轮说的话全丢。所以先归一化成 png，
+// 转不了就让调用方按"这张图看不了"处理，不要拖累整轮。
+async function convertToPng(buffer) {
+  const fsMod = await import('node:fs');
+  const fs = fsMod.default || fsMod;
+  const stamp = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const src = path.join(os.tmpdir(), `img-${stamp}.bin`);
+  const dst = path.join(os.tmpdir(), `img-${stamp}.png`);
+  try {
+    fs.writeFileSync(src, buffer);
+    await execFileP('ffmpeg', ['-y', '-loglevel', 'error', '-i', src, '-frames:v', '1', dst], { timeout: 20000 });
+    const png = fs.readFileSync(dst);
+    return png && png.length ? png : null;
+  } catch {
+    return null;
+  } finally {
+    try { fs.unlinkSync(src); } catch { /* ignore */ }
+    try { fs.unlinkSync(dst); } catch { /* ignore */ }
+  }
+}
+
+async function normalizeImage(buffer, contentType) {
+  let mime = detectMime(buffer) || String(contentType || '').split(';')[0].trim().toLowerCase();
+  if (ALLOWED_IMAGE_MIME.has(mime)) return { buffer, mime };
+  const png = await convertToPng(buffer);
+  if (png) return { buffer: png, mime: 'image/png' };
   return null;
 }
 

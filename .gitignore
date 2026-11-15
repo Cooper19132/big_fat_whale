@@ -40,3 +40,4 @@ vendor/*.tar.gz
 vendor/*.tgz
 vendor/*.tar.zst
 vendor/*.zst
+qq-agent/src/*.bak-*
