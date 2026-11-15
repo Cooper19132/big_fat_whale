@@ -418,7 +418,8 @@ export function buildPastState(store, chatKey, { excludeIds = [] } = {}) {
 const TIC_PATTERNS = [
   [/比[^，。]{1,12}还/, '「比…还…」的对比'],
   [/一[^，。]{1,5}就/, '「一…就…」的句式'],
-  [/[^？?。]{0,10}(挺|很|还算)(?!不)[^，。]{1,4}/, '「挺/很＋形容词」的评价']
+  [/[^？?。]{0,10}(挺|很|还算)(?!不)[^，。]{1,4}/, '「挺/很＋形容词」的评价'],
+  [/我(太)?懂(了)?[^，。]{0,8}(没法接|接不下去|不好接)/, '「我懂了…没法接」的接话']
 ];
 
 export function recentTics(store, chatKey, { limit = 60 } = {}) {
@@ -430,6 +431,12 @@ export function recentTics(store, chatKey, { limit = 60 } = {}) {
       const n = mine.filter((m) => re.test(String(m.text || ''))).length;
       const pct = (n / mine.length) * 100;
       if (n >= 3 && pct >= 3) hits.push(`${name}最近 ${mine.length} 条里用了 ${n} 次（${pct.toFixed(0)}%）`);
+    }
+    // 句尾语气词：啊 当万能尾巴（阈值远高于群友基线 2.7%）
+    const nA = mine.filter((m) => /啊/.test(String(m.text || ''))).length;
+    const pctA = (nA / mine.length) * 100;
+    if (nA >= 6 && pctA >= 14) {
+      hits.push(`「啊」当尾巴：最近 ${mine.length} 条里 ${nA} 条带（${pctA.toFixed(0)}%，群友 3% 左右）`);
     }
     return hits;
   } catch { return []; }
