@@ -15,6 +15,7 @@ import { formatStickerList } from './stickers.js';
 import { validateImageUrl, safeFetchBinary } from './safe-fetch.js';
 import { webSearch, webFetch, anysearchSearch } from './web-search.js';
 import { htmlToText, looksStructured, extractMeta } from './html-text.js';
+import { scanMessages, dropOffending } from './phrase-guard.js';
 
 // 本工具允许读发的本地目录：项目内的 workspace/ 与 dsh-work/，外加系统临时目录。
 // 不写死部署路径（历史上是 /root/qq-agent-v2/...），换机器/换目录自动跟着走。
@@ -907,8 +908,22 @@ export function buildToolDefs() {
       },
       async execute(ctx, args) {
         try {
-          const messages = normalizeMessageList(args.messages);
+          let messages = normalizeMessageList(args.messages);
           if (!messages.length) return err('消息内容为空');
+          // 端架子/纯表态硬闸：人设里写了也照犯，就在发送口拦掉（主人 2026-11-16 点名的整批句子）
+          const bad = scanMessages(messages);
+          if (bad.length) {
+            ctx.session.bannedBlocks = (ctx.session.bannedBlocks || 0) + 1;
+            const detail = bad.map((b) => `「${b.hits[0].phrase}」(${b.hits[0].label})`).join('、');
+            ctx.emit?.('log', { level: 'warn', message: `[短语闸] 第 ${ctx.session.bannedBlocks} 次拦下：${detail}` });
+            if (ctx.session.bannedBlocks <= 2) {
+              return err(`这几句是端着的表态，不要发：${detail}。改成具体的人、动作、时间或你自己的反应，重说一遍；说不出来就少说一句。`);
+            }
+            messages = dropOffending(messages);
+            if (!messages.length) {
+              return ok({ sent: 0, note: '整批都是表态句，这一轮不发了。别解释、别道歉，直接结束或说点具体的。' });
+            }
+          }
           // 群聊默认用 QQ 的「引用回复」发出去：模型没显式指定 replyToMessageId 时，
           // 自动引用本次唤醒的最新一条别人的消息，保证群里每条回话都挂在被回的那条下面。
           let replyTo = args.replyToMessageId ?? null;
