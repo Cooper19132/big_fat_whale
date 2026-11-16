@@ -419,7 +419,9 @@ const TIC_PATTERNS = [
   [/比[^，。]{1,12}还/, '「比…还…」的对比'],
   [/一[^，。]{1,5}就/, '「一…就…」的句式'],
   [/[^？?。]{0,10}(挺|很|还算)(?!不)[^，。]{1,4}/, '「挺/很＋形容词」的评价'],
-  [/我(太)?懂(了)?[^，。]{0,8}(没法接|接不下去|不好接)/, '「我懂了…没法接」的接话']
+  [/我(太)?懂(了)?[^，。]{0,8}(没法接|接不下去|不好接)/, '「我懂了…没法接」的接话'],
+  [/就是[^，。]{0,14}(那种|的)$|就是[^，。]{0,14}(那种|的)[ ，]/, '「就是…那种」的定义腔'],
+  [/(倒是|合着|还挺|也真)/, '「倒是/合着」的副词垫']
 ];
 
 export function recentTics(store, chatKey, { limit = 60 } = {}) {
@@ -437,6 +439,12 @@ export function recentTics(store, chatKey, { limit = 60 } = {}) {
     const pctA = (nA / mine.length) * 100;
     if (nA >= 6 && pctA >= 14) {
       hits.push(`「啊」当尾巴：最近 ${mine.length} 条里 ${nA} 条带（${pctA.toFixed(0)}%，群友 3% 左右）`);
+    }
+    // 短句闸：真人 59% 的气泡 ≤8 字，她只有 6%——整段没短句就是在写句子，不是在打字
+    const short = mine.filter((m) => String(m.text || '').replace(/\s/g, '').length <= 8).length;
+    const pctS = (short / mine.length) * 100;
+    if (mine.length >= 12 && pctS < 18) {
+      hits.push(`连着 ${mine.length} 条里只有 ${short} 条是两三个字的短句（群友一多半都是）`);
     }
     return hits;
   } catch { return []; }
@@ -525,7 +533,14 @@ export function buildUserPrompt(ctx) {
   try {
     const tics = recentTics(ctx.store, ctx.chatKey, { limit: 60 });
     if (tics.length) {
-      parts.push(`【换个说法】${tics.join('；')}。这条别再用了，换成具体动作、次数或你自己的反应。`);
+      const ticParts = tics.filter((x) => !x.startsWith('连着'));
+      const shortHit = tics.find((x) => x.startsWith('连着'));
+      if (ticParts.length) {
+        parts.push(`【换个说法】${ticParts.join('；')}。这条别再用了，换成具体动作、次数或你自己的反应。`);
+      }
+      if (shortHit) {
+        parts.push(`【写短点】${shortHit}。这一轮至少发一条只有两三个字的（嗯、对、草、行、真的假的），别每条都写成完整的句子。`);
+      }
     }
   } catch { /* 统计坏了不影响说话 */ }
 
