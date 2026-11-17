@@ -459,8 +459,20 @@ function triggerLabels(entry, ctx) {
   const lower = text.toLowerCase();
   const nick = String(ctx.selfNickname || '').toLowerCase();
   const botName = String((ctx.persona?.botName) || getConfig().persona.botName || '').toLowerCase();
-  if (text.startsWith('@') || text.includes(`@${ctx.selfNickname}`) || (nick && text.includes(`@${nick}`))) labels.push('@我');
-  if ((botName && lower.includes(botName)) || (nick && lower.includes(nick))) labels.push('提到我');
+  // 群名片常写成「溯溯（Cooper的大肥鱼女仆）」，别人只会喊前面的「溯溯」，
+  // 光比对整串名片会漏掉不带 @ 的那一半。这里把名片前缀和配置里的别名都算进来。
+  const aliases = new Set();
+  for (const raw of [ctx.selfNickname, ctx.persona?.botName, getConfig().persona.botName,
+    ...(Array.isArray(getConfig().persona?.aliases) ? getConfig().persona.aliases : [])]) {
+    const s = String(raw || '').trim();
+    if (!s) continue;
+    aliases.add(s.toLowerCase());
+    const base = s.split(/[（(]/)[0].trim();
+    if (base && base.length >= 2) aliases.add(base.toLowerCase());
+  }
+  if (text.startsWith('@') || (nick && text.includes(`@${nick}`))) labels.push('@我');
+  const mentioned = [...aliases].some((a) => a && lower.includes(a));
+  if (mentioned) labels.push('提到我');
   if (/[?？]$/.test(text.trim()) || /[吗呢]/.test(text)) labels.push('提问');
   if (text.startsWith('[引用 ')) labels.push('引用');
   if (text.includes('[拍一拍]')) labels.push('拍一拍');

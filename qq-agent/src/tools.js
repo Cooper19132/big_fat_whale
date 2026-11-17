@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getConfig, ROOT, DATA_DIR } from './config.js';
 import { normalizeMessageList, unquoteJsonString } from './util.js';
+import { splitOnCjkSpace } from './style-split.js';
 import { formatStickerList } from './stickers.js';
 import { validateImageUrl, safeFetchBinary } from './safe-fetch.js';
 import { webSearch, webFetch, anysearchSearch } from './web-search.js';
@@ -909,6 +910,9 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           let messages = normalizeMessageList(args.messages);
+          if (!messages.length) return err('消息内容为空');
+          // 空格两段式：中文之间的空格在发送口直接拆成多条短句（她 54.3% 的发言是这种一整条）
+          if (getConfig().style?.splitOnSpace !== false) messages = splitOnCjkSpace(messages);
           if (!messages.length) return err('消息内容为空');
           // 端架子/纯表态硬闸：人设里写了也照犯，就在发送口拦掉（主人 2026-11-16 点名的整批句子）
           const bad = scanMessages(messages);
