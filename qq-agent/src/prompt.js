@@ -18,6 +18,28 @@ import { formatFullTime, formatShortTime } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import fs from 'node:fs';
 import path from 'node:path';
+
+// ── 外部提示词引擎（2026-11-18）────────────────────────────────────────────
+// config.prompt.engine = 'gemini' 时，system 提示词与角色设定都改用
+// qq-agent/prompts/gemini/ 下的文件（Gemini 版：system-prompt.txt + persona-合并版.md）。
+// 改法只在装配层，不动人设文件本身，随时可以切回 builtin。
+const GEMINI_DIR = new URL('../prompts/gemini/', import.meta.url);
+
+export function promptEngine() {
+  try {
+    return String(getConfig()?.prompt?.engine || 'builtin');
+  } catch {
+    return 'builtin';
+  }
+}
+
+export function readGeminiFile(name) {
+  try {
+    return fs.readFileSync(new URL(name, GEMINI_DIR), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
 import { DATA_DIR } from './config.js';
 
 // ── 系统提示 ─────────────────────────────────────────────────────────────
@@ -309,6 +331,11 @@ function qqSceneRules() {
 /** 组装系统提示。 */
 export function buildSystemPrompt({ persona } = {}) {
   const cfg = persona ?? getConfig().persona;
+  // prompt.engine === 'gemini' → 用 prompts/gemini/system-prompt.txt 整份替换（2026-11-18 主人指定按 Gemini 版执行）
+  if (promptEngine() === 'gemini') {
+    const external = readGeminiFile('system-prompt.txt');
+    if (external) return external;
+  }
   // persona.variant === 'slim' → 精简提示词（2026-11-17 加，默认 full，config 一键切换）
   if (String(cfg?.variant || '') === 'slim') return SLIM_SYSTEM;
   const parts = [
@@ -389,6 +416,12 @@ export function buildPastState(store, chatKey, { excludeIds = [] } = {}) {
   const idLimit = Math.max(0, Number(cfg.pastStateIdLimit ?? 30));
   const idFrom = Math.max(0, messages.length - idLimit);
   let lines = messages.map((m, i) => ({ m, line: formatEntry(m, { withId: (m.media || []).length > 0 || i >= idFrom }) }));
+  // 防上下文污染（Gemini 2026-11-18 建议）：群里关于「八股/自检/AI 味」的对话本身就是最强的
+  // few-shot——模型照着历史里的腔调说，喊话越多学得越像。Gemini 引擎下默认把这行历史剔掉。
+  if (promptEngine() === 'gemini' && getConfig().prompt?.dropStyleTalk !== false) {
+    const styleTalk = /八股|鱼腥|AI ?味|自检|自查表|端着|模板腔|人机味/;
+    lines = lines.filter((l) => !styleTalk.test(l.m.text || ''));
+  }
   // 从头部丢弃超预算的行
   let droppedByChars = 0;
   while (lines.length > 1 && lines.reduce((sum, l) => sum + l.line.length + 1, 0) > maxChars) {
@@ -515,7 +548,11 @@ export function buildUserPrompt(ctx) {
   const persona = ctx.persona || cfg.persona;
   const variant = String(persona?.variant || cfg.persona?.variant || 'full');
   const slim = variant === 'slim';
-  const roleText = slim ? (persona.roleTextSlim || persona.roleText) : persona.roleText;
+  const gemini = promptEngine() === 'gemini';
+  // Gemini 引擎下角色设定整份来自 persona.roleText（= prompts/gemini/persona-合并版.md 推送进来的那份）
+  const roleText = gemini
+    ? (persona.roleText || '')
+    : (slim ? (persona.roleTextSlim || persona.roleText) : persona.roleText);
   const now = Date.now();
   const excludeIds = ctx.triggerEntries.map((m) => m.id);
   const past = buildPastState(ctx.store, ctx.chatKey, { excludeIds });
@@ -549,7 +586,7 @@ export function buildUserPrompt(ctx) {
 
   // 口头结构配额：她自己的话里哪几种句式已经用滥了，直接摆出来让她换（比写在人设里更硬）
   try {
-    const tics = slim ? [] : recentTics(ctx.store, ctx.chatKey, { limit: 60 });
+    const tics = (slim || gemini) ? [] : recentTics(ctx.store, ctx.chatKey, { limit: 60 });
     if (tics.length) {
       const ticParts = tics.filter((x) => !x.startsWith('连着'));
       const shortHit = tics.find((x) => x.startsWith('连着'));
@@ -564,14 +601,14 @@ export function buildUserPrompt(ctx) {
 
   // 文风账：谁、什么时候、说过她八股——把「喊话」变成可累积的记录
   try {
-    if (!slim) noteStyleComplaint(ctx.triggerEntries, ctx.selfId);
-    const debt = slim ? '' : styleDebtSummary();
+    if (!slim && !gemini) noteStyleComplaint(ctx.triggerEntries, ctx.selfId);
+    const debt = (slim || gemini) ? '' : styleDebtSummary();
     if (debt) parts.push(`【文风账】${debt}`);
   } catch { /* 记账坏了不影响说话 */ }
 
   // 暗涌：情绪是状态不是记忆——这里给的是「此刻的她」，不是检索回来的过去
   try {
-    const mood = slim ? '' : renderMood();
+    const mood = (slim || gemini) ? '' : renderMood();
     if (mood) parts.push(mood);
   } catch { /* 情绪模块坏了不影响说话 */ }
 
