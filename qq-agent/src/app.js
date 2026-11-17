@@ -17,6 +17,7 @@ import { readForwardDeep, flattenSegmentsInline } from './tools.js';
 import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
 import { StickerManager } from './sticker-manager.js';
+import { autoCollectIncoming } from './sticker-autocollect.js';
 import { SendQueue } from './sender.js';
 import { SessionRegistry } from './sessions.js';
 import { Orchestrator } from './orchestrator.js';
@@ -484,6 +485,14 @@ export function createApp({ log = console.log } = {}) {
       media
     });
     emit('chat-update', chatKey);
+    // 群里的斗图/表情包自动入池（pending，不打扰主流程；失败了也只是少收一张）
+    if (kind === 'group' && media.some((m) => m.kind === 'image')) {
+      autoCollectIncoming({ chatKey, media, senderId, senderName, mid: event.message_id })
+        .then((r) => {
+          if (r?.added?.length) log(`[表情收集] 收下 ${r.added.join(',')}（${chatKey}，${senderName}）`);
+        })
+        .catch((e) => log('[表情收集] 失败:', e?.message ?? e));
+    }
     // 视频落盘：QQ 的视频直链会过期，收到就存一份（失败不影响主流程）
     if (media.some((m) => m.kind === 'video' && m.url)) {
       persistVideo(chatKey, event.message_id, media).catch((e) => log('[视频] 落盘失败:', e?.message ?? e));

@@ -154,7 +154,17 @@ export const DEFAULT_CONFIG = {
     enabled: true,
     promptMaxStickers: 10,
     collectEnabled: true,
-    maxCollectPerHour: 10
+    maxCollectPerHour: 10,
+    // 群里收到的表情/斗图自动落盘入池（pending，需她看图+写备注才可用）。
+    autoCollect: {
+      enabled: true,
+      minBytes: 1024,
+      maxBytes: 5242880,
+      perChatDailyCap: 80,
+      globalMax: 300,
+      maxPerMessage: 2,
+      timeoutMs: 15000
+    }
   },
   // 存储
   store: {

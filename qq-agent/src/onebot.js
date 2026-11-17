@@ -409,7 +409,25 @@ export function extractMediaFromSegments(segments) {
     if (!seg || typeof seg !== 'object') continue;
     const d = seg.data ?? {};
     if (seg.type === 'image') {
-      media.push({ kind: 'image', file: String(d.file ?? ''), url: String(d.url ?? ''), summary: String(d.summary ?? '') });
+      media.push({
+        kind: 'image',
+        file: String(d.file ?? ''),
+        url: String(d.url ?? ''),
+        summary: String(d.summary ?? ''),
+        // sub_type=1 是"表情/斗图"（收藏表情、群表情包都走这里）；0 是普通图片。
+        subType: Number(d.sub_type ?? d.subType ?? 0) || 0
+      });
+    } else if (seg.type === 'mface') {
+      // 商城表情（NapCat 部分版本单独给 mface 段）
+      media.push({
+        kind: 'image',
+        file: String(d.file ?? ''),
+        url: String(d.url ?? ''),
+        summary: String(d.summary ?? ''),
+        subType: 1,
+        mface: true,
+        emojiId: String(d.emoji_id ?? d.emojiId ?? '')
+      });
     } else if (seg.type === 'face') {
       media.push({ kind: 'face', faceId: String(d.id ?? '') });
     } else if (seg.type === 'file') {

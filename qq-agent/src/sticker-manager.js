@@ -50,9 +50,9 @@ export class StickerManager {
     return this.syncing;
   }
 
-  async list(query = '', limit = 48, force = false) {
+  async list(query = '', limit = 48, force = false, opts = {}) {
     const synced = await this.sync(force);
-    return formatStickerList(synced.entries, query, limit);
+    return formatStickerList(synced.entries, query, limit, opts);
   }
 
   async find(ref) {

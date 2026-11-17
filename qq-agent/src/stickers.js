@@ -17,16 +17,31 @@ export function normalizeStickerEntry(raw) {
   const tags = Array.isArray(entry.tags)
     ? entry.tags.map((t) => String(t ?? '').trim()).filter(Boolean).slice(0, 20)
     : [];
+  const desc = String(entry.desc ?? '').trim();
+  const localNote = String(entry.localNote ?? '').trim();
+  const source = entry.source === 'manual' ? 'manual'
+    : entry.source === 'ai' ? 'ai'
+      : (entry.source === 'auto' ? 'auto' : 'qq');
+  // 自动收集来的表情先进 pending：不进提示词、不许直接发，得她先看图+写备注认领。
+  const labeled = !!(desc || localNote || tags.length || String(entry.usage ?? '').trim());
+  const status = source === 'auto'
+    ? (labeled || entry.status === 'labeled' ? 'labeled' : 'pending')
+    : 'labeled';
   return {
     id,
     resId: String(entry.resId || entry.emoji_id || id).trim(),
     url: String(entry.url || '').trim(),
+    localFile: String(entry.localFile || '').trim(),
+    hash: String(entry.hash || '').trim(),
+    bytes: Math.max(0, Number(entry.bytes) || 0),
+    from: entry.from && typeof entry.from === 'object' ? entry.from : null,
+    status,
     md5: String(entry.md5 || '').trim().toUpperCase(),
-    desc: String(entry.desc ?? '').trim(),
-    localNote: String(entry.localNote ?? '').trim(),
+    desc,
+    localNote,
     tags,
     usage: String(entry.usage ?? '').trim(),
-    source: entry.source === 'manual' ? 'manual' : (entry.source === 'ai' ? 'ai' : 'qq'),
+    source,
     useCount: Math.max(0, Number(entry.useCount) || 0),
     lastUsedAt: Number(entry.lastUsedAt) || 0,
     lastContext: String(entry.lastContext ?? '').slice(0, 200),
@@ -111,8 +126,11 @@ export function findSticker(entries, ref) {
   }) || null;
 }
 
-export function formatStickerList(entries, query = '', limit = 48) {
-  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+export function formatStickerList(entries, query = '', limit = 48, { includePending = false } = {}) {
+  const all = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+  // 自动收集但还没认领的（pending）默认不列：她没看过图就发，等于瞎发。
+  const list = includePending ? all : all.filter((e) => e.status !== 'pending');
+  const pending = all.filter((e) => e.status === 'pending').length;
   const q = String(query ?? '').trim().toLowerCase();
   const filtered = q
     ? list.filter((e) => {
@@ -126,15 +144,18 @@ export function formatStickerList(entries, query = '', limit = 48) {
     desc: e.desc || '',
     localNote: e.localNote || '',
     tags: e.tags || [],
-    useCount: e.useCount || 0
+    useCount: e.useCount || 0,
+    ...(e.status === 'pending' ? { pending: true } : {})
   }));
-  return { total: list.length, matched: filtered.length, truncated: filtered.length > max, stickers: items };
+  return { total: list.length, matched: filtered.length, truncated: filtered.length > max, pending, stickers: items };
 }
 
 /** 提示词里的【可用表情包】摘要（不暴露完整 URL，控制上下文体积）。 */
 export function buildStickerContext(entries, max = 10) {
-  const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+  const all = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
+  const list = all.filter((e) => e.status !== 'pending');
   if (!list.length) return '';
+  const pending = all.filter((e) => e.status === 'pending').length;
   const top = [...list]
     .sort((a, b) => (b.useCount || 0) - (a.useCount || 0) || ((b.desc || b.localNote) ? 1 : 0) - ((a.desc || a.localNote) ? 1 : 0))
     .slice(0, Math.max(1, Math.min(30, Number(max) || 10)));
@@ -144,7 +165,8 @@ export function buildStickerContext(entries, max = 10) {
     const used = e.useCount ? `（用过${e.useCount}次）` : '';
     return `- ${label}${extra}${used}`;
   });
-  return `【可用表情包】你的 QQ 收藏表情里有 ${list.length} 个表情（以下为常用/有备注的 ${top.length} 个，完整列表可用 list_stickers 查询）：\n${lines.join('\n')}`;
+  const pendingLine = pending ? `\n（另外有 ${pending} 张群里收来的新表情还没认领：list_stickers pending=true 看 id，get_sticker_image 看图，sticker_note 写一句就能用。）` : '';
+  return `【可用表情包】你的表情库里有 ${list.length} 个能用的表情（以下为常用/有备注的 ${top.length} 个，完整列表可用 list_stickers 查询）：\n${lines.join('\n')}${pendingLine}`;
 }
 
 /** 发送前的表情包策略提示（软策略）。 */
@@ -154,6 +176,7 @@ export function buildStickerStrategyHint() {
     '- 合适时机：被戳中笑点/槽点、接梗、怼人、赞同、自嘲、安慰、无语、赢了/输了、告别/晚安、别人发了表情时回一张，都可以自然用。',
     '- 频率：普通闲聊不用每条都配；大约每 3~5 轮来一张就够，热闹/玩梗时可以更密，但不要连续刷屏。',
     '- 选择：优先用备注（desc）和你的记忆（localNote/tags）能准确对上语境的；没有备注/不确定的表情，先 get_sticker_image 看图再决定，不要瞎发。',
+    '- 群里会自动收新表情（id 形如 auto_ 开头），没收的都算"没认领"：list_stickers pending=true 看得到，先 get_sticker_image 看一眼，再用 sticker_note 写一句它是什么表情/什么时候用——认过之后 send_sticker 才发得出去。',
     '- 发送：用 send_sticker；一条消息只能是一张表情，不能在同一气泡里附带文字；想说的话先用 send_message 作为单独气泡发出，再单独发表情。',
     '- 不要：在严肃/正式/敏感话题硬塞表情；不要每次都用同一个；不要一条消息里塞多个表情；不要把文字和表情混在同一个气泡里。'
   ].join('\n');

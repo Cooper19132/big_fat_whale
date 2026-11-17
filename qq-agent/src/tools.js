@@ -983,6 +983,10 @@ export function buildToolDefs() {
         try {
           const sticker = await ctx.stickers.find(unquoteJsonString(args.stickerId));
           if (!sticker) return err(`找不到表情 ${args.stickerId}，请先用 list_stickers 获取有效 id`);
+          // 自动收来的表情在认领之前不许发（她没看过图，发出去就是瞎发）
+          if (sticker.source === 'auto' && sticker.status === 'pending') {
+            return err(`表情 ${sticker.id} 是刚收来还没认过的：先 get_sticker_image ${sticker.id} 看一眼，再用 sticker_note 写一句它是什么表情，之后才能发`);
+          }
           // ① 本地表情优先：data/stickers/<id>.<ext> 存在就直接读文件发 base64，
           //    完全不依赖外网图床（某些图床对服务器不可达）。支持 jpg/png/gif/webp。
           const stickerDir = path.join(DATA_DIR, 'stickers');
@@ -1384,17 +1388,29 @@ export function buildToolDefs() {
     },
     {
       name: 'list_stickers',
-      description: '查看/搜索你的 QQ 收藏表情（含备注和你的本地笔记）。',
+      description: '查看/搜索你的表情库（含 QQ 收藏表情 + 群里收来的）。默认不列还没认领的新表情。',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: '可选搜索词，匹配备注/笔记/标签' },
-          limit: { type: 'integer', description: '最多返回条数，默认 24' }
+          limit: { type: 'integer', description: '最多返回条数，默认 24' },
+          pending: { type: 'boolean', description: '可选：true = 只看/也列没人认领的新表情（看完用 sticker_note 写一句认领）' }
         }
       },
       async execute(ctx, args) {
         try {
-          const result = await ctx.stickers.list(String(args.query ?? ''), Math.min(100, Math.max(1, Number(args.limit) || 24)));
+          const includePending = args.pending === true || String(args.pending) === 'true';
+          const result = await ctx.stickers.list(
+            String(args.query ?? ''),
+            Math.min(100, Math.max(1, Number(args.limit) || 24)),
+            false,
+            { includePending }
+          );
+          if (includePending) {
+            const pend = result.stickers.filter((s) => s.pending);
+            const done = result.stickers.filter((s) => !s.pending);
+            return ok({ ...result, stickers: [...pend, ...done] });
+          }
           return ok(result);
         } catch (error) {
           return err(error?.message ?? error);
@@ -1413,6 +1429,15 @@ export function buildToolDefs() {
         try {
           const sticker = await ctx.stickers.find(args.stickerId);
           if (!sticker) return err(`找不到表情 ${args.stickerId}`);
+          // 群里收来的表情只存了本地文件，没有公网地址
+          if (!sticker.url && sticker.localFile) {
+            const abs = path.join(DATA_DIR, sticker.localFile);
+            const buf = await fs.promises.readFile(abs);
+            const ext = path.extname(abs).slice(1).toLowerCase() || 'png';
+            const mime = ext === 'jpg' ? 'jpeg' : ext;
+            const dataUrl = `data:image/${mime};base64,${buf.toString('base64')}`;
+            return { content: imageParts(`表情 ${sticker.id}（还没写备注，看完用 sticker_note 记一句它是什么表情）：`, [dataUrl]) };
+          }
           if (!sticker.url) return err('该表情没有图片地址');
           const dataUrl = await downloadImageAsDataUrl(sticker.url);
           return { content: imageParts(`表情 ${sticker.id}（备注：${sticker.desc || '无'}）：`, [dataUrl]) };
