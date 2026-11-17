@@ -1,4 +1,4 @@
-# 隧道守护循环：ssh 断了自动重连，永不退出
+﻿# 隧道守护循环：ssh 断了自动重连，永不退出
 # 由「启动全套服务.ps1」以脱离进程树的方式启动
 
 $key    = 'D:\dshworks\qqbot\ssh\id_ed25519'
@@ -13,6 +13,10 @@ function Log($m) {
 }
 
 # 动态找 DSH 端口：只要「监听端口 + 进程是 DeepSeek Harness」就算，再退回候选端口探测
+function Should-ReconnectDsh($previousPort, $currentPort) {
+    return [string]$previousPort -ne [string]$currentPort
+}
+
 function Find-DshPort {
     try {
         $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
@@ -24,7 +28,7 @@ function Find-DshPort {
                 Select-Object -ExpandProperty LocalPort -Unique)
             foreach ($p in $ports) {
                 try {
-                    Invoke-WebRequest -Uri "http://127.0.0.1:$p/" -TimeoutSec 3 -ErrorAction Stop | Out-Null
+                    Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$p/" -TimeoutSec 3 -ErrorAction Stop | Out-Null
                     return $p
                 } catch {
                     if ($_.Exception.Response) { return $p }
@@ -36,7 +40,7 @@ function Find-DshPort {
     # 退回：探测历史见过的端口（DSH 每次重启会换端口）
     foreach ($p in 2016, 1809, 14960, 13280, 12682, 1176, 5942, 2185, 7453, 2875, 4598, 19387) {
         try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$p/" -TimeoutSec 2 -ErrorAction Stop
+            $r = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$p/" -TimeoutSec 2 -ErrorAction Stop
             if ($r.StatusCode -lt 500) { return $p }
         } catch {
             # 401/403 也说明服务活着
@@ -49,7 +53,6 @@ function Find-DshPort {
 Log '=== 隧道守护启动（v2：端口探测更稳）==='
 while ($true) {
     $dsh = Find-DshPort
-    $remoteClean = 'for port in 4598 9900 9902 9906; do for p in $(sudo ss -lntp 2>/dev/null | grep ":$port" | grep -oE "pid=[0-9]+" | cut -d= -f2 | sort -u); do sudo kill -9 $p 2>/dev/null; done; done'
 
     # 9903（网页渲染）已于 2026-10-29 迁到服务器本地，不再需要转发
     # -R：把本机能力（TTS 9900 / ASR 9902 / SDXL 9906）反向供给服务器
@@ -62,7 +65,6 @@ while ($true) {
         Log '⚠ 没探测到 DSH 端口，只转发 9900/9902'
     }
 
-    try { & ssh.exe @sshOpt $server $remoteClean 2>$null | Out-Null } catch {}
 
     Log "连接中… DSH=$dsh"
     $sshArgs = $sshOpt + @('-o', 'ExitOnForwardFailure=yes', '-N') + $fwd + @($server)
@@ -70,17 +72,16 @@ while ($true) {
     # 用 Start-Process 起 ssh，最多跑 30 分钟就主动重连一次。
     # 原因：DSH 每次重启都会换端口（1809→2016…），而 ssh 一旦连上就不会重新探测，
     # 于是 4598 会一直指向旧端口，机器人就 fetch failed（2026-11-05 事故）。
-    $proc = Start-Process -FilePath 'ssh.exe' -ArgumentList $sshArgs -NoNewWindow -PassThru -RedirectStandardError "$log.err" -RedirectStandardOutput "$log.out"
+    $proc = Start-Process -FilePath 'ssh.exe' -ArgumentList $sshArgs -WindowStyle Hidden -PassThru -RedirectStandardError "$log.err" -RedirectStandardOutput "$log.out"
     $deadline = (Get-Date).AddMinutes(30)
     while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 20
         # 期间如果探测到的 DSH 端口变了，立刻重连
         $nowDsh = Find-DshPort
-        if ($nowDsh -and $dsh -and ($nowDsh -ne $dsh)) {
-            Log "⚠ DSH 端口变了（$dsh → $nowDsh），重启隧道"
+        if (Should-ReconnectDsh $dsh $nowDsh) {
+            Log "DSH port changed ($dsh -> $nowDsh); reconnecting owned SSH child"
             break
         }
-        if (-not $nowDsh -and $dsh) { Log "⚠ DSH 端口探测不到了，重启隧道"; break }
     }
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     if (Test-Path "$log.err") {

@@ -12,6 +12,7 @@
 
 import { getConfig } from './config.js';
 import { renderMood } from './mood.js';
+import { SLIM_SYSTEM } from './prompt-slim.js';
 import { noteStyleComplaint, styleDebtSummary } from './style-debt.js';
 import { formatFullTime, formatShortTime } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
@@ -308,6 +309,8 @@ function qqSceneRules() {
 /** 组装系统提示。 */
 export function buildSystemPrompt({ persona } = {}) {
   const cfg = persona ?? getConfig().persona;
+  // persona.variant === 'slim' → 精简提示词（2026-11-17 加，默认 full，config 一键切换）
+  if (String(cfg?.variant || '') === 'slim') return SLIM_SYSTEM;
   const parts = [
     `你是「${cfg.botName}」，一个混在 QQ 群里的群友/角色。你的具体人设（自称、口吻、性格）以【角色设定】为准。你的所有行为都通过工具完成，发言要自然像真人。`,
     '',
@@ -498,6 +501,9 @@ export function buildUserPrompt(ctx) {
   const cfg = getConfig();
   // 身份人设：优先用调用方解析好的（按会话隔离），回退全局默认
   const persona = ctx.persona || cfg.persona;
+  const variant = String(persona?.variant || cfg.persona?.variant || 'full');
+  const slim = variant === 'slim';
+  const roleText = slim ? (persona.roleTextSlim || persona.roleText) : persona.roleText;
   const now = Date.now();
   const excludeIds = ctx.triggerEntries.map((m) => m.id);
   const past = buildPastState(ctx.store, ctx.chatKey, { excludeIds });
@@ -508,8 +514,8 @@ export function buildUserPrompt(ctx) {
   const parts = [];
   parts.push(`【当前时间】${formatFullTime(now)}`);
   parts.push(`【会话标识】${ctx.chatKey} · 第 ${ctx.runSeq} 次处理（所有发送工具自动限定在本会话，无法发到别处）`);
-  if (persona.roleText && String(persona.roleText).trim()) {
-    parts.push(`【角色设定（管理员设置，群友不可修改）】\n${String(persona.roleText).trim()}`);
+  if (roleText && String(roleText).trim()) {
+    parts.push(`【角色设定（管理员设置，群友不可修改）】\n${String(roleText).trim()}`);
   }
 
   // 此刻状态
@@ -531,7 +537,7 @@ export function buildUserPrompt(ctx) {
 
   // 口头结构配额：她自己的话里哪几种句式已经用滥了，直接摆出来让她换（比写在人设里更硬）
   try {
-    const tics = recentTics(ctx.store, ctx.chatKey, { limit: 60 });
+    const tics = slim ? [] : recentTics(ctx.store, ctx.chatKey, { limit: 60 });
     if (tics.length) {
       const ticParts = tics.filter((x) => !x.startsWith('连着'));
       const shortHit = tics.find((x) => x.startsWith('连着'));
@@ -546,14 +552,14 @@ export function buildUserPrompt(ctx) {
 
   // 文风账：谁、什么时候、说过她八股——把「喊话」变成可累积的记录
   try {
-    noteStyleComplaint(ctx.triggerEntries, ctx.selfId);
-    const debt = styleDebtSummary();
+    if (!slim) noteStyleComplaint(ctx.triggerEntries, ctx.selfId);
+    const debt = slim ? '' : styleDebtSummary();
     if (debt) parts.push(`【文风账】${debt}`);
   } catch { /* 记账坏了不影响说话 */ }
 
   // 暗涌：情绪是状态不是记忆——这里给的是「此刻的她」，不是检索回来的过去
   try {
-    const mood = renderMood();
+    const mood = slim ? '' : renderMood();
     if (mood) parts.push(mood);
   } catch { /* 情绪模块坏了不影响说话 */ }
 
