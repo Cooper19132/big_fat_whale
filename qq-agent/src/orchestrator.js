@@ -17,6 +17,7 @@ import { chatCompletion, addUsage, estimateCost } from './llm.js';
 import { nudge, noteSilence } from './mood.js';
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 import { looksLikeMonologue, looksSpokenToUser } from './monologue-guard.js';
+import { recordReasoning } from './reasoning-observe.js';
 import { modelVisionVerdict } from './vision-scan.js';
 
 /**
@@ -542,6 +543,13 @@ export class Orchestrator {
       session.lastPromptTokens = Number(response.usage?.prompt_tokens) || session.lastPromptTokens || 0;
 
       const msg = response.message;
+      // 观察：把推理内容单独留一份（不影响任何行为，只为了能统计"思考的口吻"）。
+      // 起因：B 站那期「推理预填充」视频——reasoning 的语气会渗进最终回复，
+      // 但 DeepSeek 目前不支持预填充 reasoning，只能先观测再谈干预。
+      try {
+        const rc = typeof msg.reasoning_content === 'string' ? msg.reasoning_content.trim() : '';
+        if (rc) recordReasoning(session.chatKey || session.chat_id || '', rc);
+      } catch { /* 观测失败不影响对话 */ }
       const assistantEntry = {
         role: 'assistant',
         content: typeof msg.content === 'string' ? msg.content : (msg.content ?? null),
