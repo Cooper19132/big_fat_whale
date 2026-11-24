@@ -16,7 +16,7 @@
 // }
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, getConfig } from './config.js';
 
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 
@@ -52,7 +52,17 @@ function loadChat(chatKey) {
     let text = fs.readFileSync(chatFile(chatKey), 'utf8');
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     const parsed = JSON.parse(text);
-    if (parsed && Array.isArray(parsed.messages)) return parsed;
+    if (parsed && Array.isArray(parsed.messages)) {
+      // Processing claims are durable; a new process retries interrupted batches.
+      for (const m of parsed.messages) {
+        if (!m.processing) continue;
+        m.read = false;
+        delete m.processing;
+        // An external request may have succeeded before the process died.
+        if (m.effectAttempted) m.retryExhausted = true;
+      }
+      return parsed;
+    }
   } catch { /* 新会话 */ }
   return { chatKey, nextLocalId: 1, messages: [] };
 }
@@ -146,15 +156,65 @@ export class ChatStore {
   /** 快照当前未读并全部置为已读（运行开始时调用）。 */
   drainUnread(chatKey) {
     const st = this.#state(chatKey);
-    const unread = st.messages.filter((m) => !m.read && !m.self);
-    for (const m of st.messages) m.read = true;
+    const unread = st.messages.filter((m) => !m.read && !m.self && !m.retryExhausted);
+    if (!unread.length) return unread;
+    // 触发批上限：积压成百上千条时只把最近 N 条当「本次唤醒」，
+    // 更早的直接置为已读（仍留在历史里给【过去状态】用）——
+    // 否则一次唤醒塞几千条，模型必然接不上话，还会把每轮成本顶穿（2026-11-24 事故）。
+    const cap = Math.max(1, Number(getConfig().store?.maxTriggerBatch ?? 60));
+    const fresh = unread.length > cap ? unread.slice(-cap) : unread;
+    const stale = unread.length > cap ? unread.slice(0, unread.length - cap) : [];
+    for (const m of stale) m.read = true;
+    for (const m of fresh) { m.read = true; m.processing = true; }
     saveChat(st);
-    return unread;
+    return fresh;
+  }
+
+  markBatchEffect(chatKey, batch) {
+    const ids = new Set(batch.map(m => m.id));
+    const st = this.#state(chatKey);
+    for (const m of st.messages) if (ids.has(m.id) && m.processing) m.effectAttempted = true;
+    saveChat(st);
+  }
+
+  settleBatch(chatKey, batch, { error = null, retryable = true, maxAttempts = 3 } = {}) {
+    const ids = new Set(batch.map(m => m.id));
+    const st = this.#state(chatKey);
+    let retry = false;
+    let attempts = 0;
+    for (const m of st.messages) {
+      if (!ids.has(m.id)) continue;
+      delete m.processing;
+      delete m.effectAttempted;
+      if (!error) {
+        m.read = true;
+        delete m.lastError;
+        delete m.retryExhausted;
+      } else {
+        m.read = false;
+        m.retryCount = (Number(m.retryCount) || 0) + 1;
+        m.lastError = String(error).slice(0, 300);
+        m.retryExhausted = !retryable || m.retryCount >= maxAttempts;
+        retry ||= !m.retryExhausted;
+        attempts = Math.max(attempts, m.retryCount);
+      }
+    }
+    saveChat(st);
+    return { retry, attempts };
+  }
+
+  resetFailed(chatKey) {
+    const st = this.#state(chatKey);
+    for (const m of st.messages) if (!m.read && m.retryExhausted) {
+      delete m.retryExhausted;
+      m.retryCount = 0;
+    }
+    saveChat(st);
   }
 
   unreadCount(chatKey) {
     const st = this.#state(chatKey);
-    return st.messages.filter((m) => !m.read && !m.self).length;
+    return st.messages.filter((m) => !m.read && !m.self && !m.retryExhausted).length;
   }
 
   recent(chatKey, { limit = 80, offset = 0, includeSelf = true } = {}) {
@@ -206,8 +266,18 @@ export class ChatStore {
   }
 
   #trim(st) {
-    if (this.maxPerChat > 0 && st.messages.length > this.maxPerChat) {
-      st.messages.splice(0, st.messages.length - this.maxPerChat);
-    }
+    if (!(this.maxPerChat > 0) || st.messages.length <= this.maxPerChat) return;
+    let remove = st.messages.length - this.maxPerChat;
+    // 三轮淘汰，永远不动 self（机器人自己说过的话是引用/自我一致性的地基，
+    // 旧实现里它恰好是唯一「已读且不在处理中」的条目，于是每发一条就被删一条）。
+    const sweep = (pred) => {
+      st.messages = st.messages.filter((m) => {
+        if (remove > 0 && !m.self && pred(m)) { remove--; return false; }
+        return true;
+      });
+    };
+    sweep((m) => m.read && !m.processing);
+    if (remove > 0) sweep((m) => m.read);
+    if (remove > 0) sweep(() => true);
   }
 }
